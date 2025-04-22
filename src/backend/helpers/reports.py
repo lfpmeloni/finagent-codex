@@ -371,7 +371,7 @@ class ReportLabUtils:
 
             doc.build(content)
 
-            return "Annual report generated successfully."
+            return pdf_path
 
         except Exception:
             return traceback.format_exc()

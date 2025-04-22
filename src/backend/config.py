@@ -1,128 +1,78 @@
-# config.py
 import logging
 import os
-
-from autogen_ext.models.openai import AzureOpenAIChatCompletionClient
+from autogen_ext.models.openai import OpenAIChatCompletionClient
 from azure.cosmos.aio import CosmosClient
-from azure.identity.aio import (ClientSecretCredential, DefaultAzureCredential,
-                                get_bearer_token_provider)
 from dotenv import load_dotenv
 
+# Load environment variables from .env
 load_dotenv(".env", override=True)
 
 
 def GetRequiredConfig(name):
-    #return os.environ[name]
-    #print(f"GetRequiredConfig: {os.getenv(name)}")
-    return os.getenv(name)
+    value = os.getenv(name)
+    if not value:
+        raise ValueError(f"Missing required config value for: {name}")
+    return value
 
 
 def GetOptionalConfig(name, default=""):
-    # if name in os.environ:
-    #     return os.environ[name]
-    #print(f"GetOptionalConfig: {os.getenv(name)}")
-    if os.getenv(name):
-        return os.getenv(name)
-    return default
+    return os.getenv(name, default)
 
 
 def GetBoolConfig(name):
-    #return name in os.environ and os.environ[name].lower() in ["true", "1"]
-    #return os.getenv(name) and os.getenv(name).lower() in ["true", "1"]
-    if os.getenv(name):
-        if os.getenv(name).lower() in ["true", "1"]:
-            return True
-    return False
+    return os.getenv(name, "").lower() in ["true", "1"]
 
 
 class Config:
-    AZURE_TENANT_ID = GetOptionalConfig("AZURE_TENANT_ID")
-    AZURE_CLIENT_ID = GetOptionalConfig("AZURE_CLIENT_ID")
-    AZURE_CLIENT_SECRET = GetOptionalConfig("AZURE_CLIENT_SECRET")
-
-    COSMOSDB_ENDPOINT = GetRequiredConfig("COSMOSDB_ENDPOINT")
+    # Cosmos DB
+    COSMOSDB_ENDPOINT = os.getenv("COSMOSDB_ENDPOINT")
+    COSMOSDB_KEY = os.getenv("COSMOSDB_KEY")
     COSMOSDB_DATABASE = GetRequiredConfig("COSMOSDB_DATABASE")
     COSMOSDB_CONTAINER = GetRequiredConfig("COSMOSDB_CONTAINER")
 
-    AZURE_OPENAI_DEPLOYMENT_NAME = GetRequiredConfig("AZURE_OPENAI_DEPLOYMENT_NAME")
-    AZURE_OPENAI_API_VERSION = GetRequiredConfig("AZURE_OPENAI_API_VERSION")
-    AZURE_OPENAI_ENDPOINT = GetRequiredConfig("AZURE_OPENAI_ENDPOINT")
-    AZURE_OPENAI_API_KEY = GetOptionalConfig("AZURE_OPENAI_KEY")
+    # OpenAI API
+    OPENAI_API_KEY = GetRequiredConfig("OPENAI_API_KEY")
+    OPENAI_API_BASE = GetOptionalConfig("OPENAI_API_BASE", "https://api.openai.com/v1")
+    OPENAI_API_VERSION = GetOptionalConfig("OPENAI_API_VERSION", "2024-04-01-preview")
+    OPENAI_API_MODEL = GetOptionalConfig("OPENAI_API_MODEL", "gpt-4o")
 
-    AZURE_BLOB_STORAGE_NAME = GetRequiredConfig("AZURE_BLOB_STORAGE_NAME")
-    AZURE_BLOB_CONTAINER_NAME = GetRequiredConfig("AZURE_BLOB_CONTAINER_NAME")
+    # Blob storage (leave as-is if needed)
+    AZURE_BLOB_STORAGE_NAME = GetOptionalConfig("AZURE_BLOB_STORAGE_NAME")
+    AZURE_BLOB_CONTAINER_NAME = GetOptionalConfig("AZURE_BLOB_CONTAINER_NAME")
 
+    # App config
     APP_IN_CONTAINER = GetBoolConfig("APP_IN_CONTAINER")
     FRONTEND_SITE_NAME = GetOptionalConfig("FRONTEND_SITE_NAME", "http://127.0.0.1:3000")
-    
 
-    __azure_credentials = DefaultAzureCredential()
-    __comos_client = None
+    # Cached clients
+    __cosmos_client = None
     __cosmos_database = None
-    __aoai_chatCompletionClient = None
+    __openai_client = None
 
-    def GetAzureCredentials():
-        # If we have specified the credentials in the environment, use them (backwards compatibility)
-        if all(
-            [Config.AZURE_TENANT_ID, Config.AZURE_CLIENT_ID, Config.AZURE_CLIENT_SECRET]
-        ):
-            return ClientSecretCredential(
-                tenant_id=Config.AZURE_TENANT_ID,
-                client_id=Config.AZURE_CLIENT_ID,
-                client_secret=Config.AZURE_CLIENT_SECRET,
-            )
-
-        # Otherwise, use the default Azure credential which includes managed identity
-        return Config.__azure_credentials
-
-    # Gives us a cached approach to DB access
+    @staticmethod
     def GetCosmosDatabaseClient():
-        # TODO: Today this is a single DB, we might want to support multiple DBs in the future
-        if Config.__comos_client is None:
-            Config.__comos_client = CosmosClient(
-                Config.COSMOSDB_ENDPOINT, Config.GetAzureCredentials()
+        if Config.__cosmos_client is None:
+            if not Config.COSMOSDB_ENDPOINT or not Config.COSMOSDB_KEY:
+                raise Exception("Missing CosmosDB configuration")
+
+            Config.__cosmos_client = CosmosClient(
+                Config.COSMOSDB_ENDPOINT,
+                credential=Config.COSMOSDB_KEY
             )
 
-        if Config.__cosmos_database is None:
-            Config.__cosmos_database = Config.__comos_client.get_database_client(
-                Config.COSMOSDB_DATABASE
-            )
+        return Config.__cosmos_client
 
-        return Config.__cosmos_database
+    @staticmethod
+    def GetOpenAIChatCompletionClient(model_capabilities):
+        if Config.__openai_client is not None:
+            return Config.__openai_client
 
-    def GetTokenProvider(scopes):
-        return get_bearer_token_provider(Config.GetAzureCredentials(), scopes)
-
-    def GetAzureOpenAIChatCompletionClient(model_capabilities):
-        if Config.__aoai_chatCompletionClient is not None:
-            return Config.__aoai_chatCompletionClient
-
-        #print(f"Config.AZURE_OPENAI_API_KEY: {Config.AZURE_OPENAI_API_KEY}")
-        if Config.AZURE_OPENAI_API_KEY == "":
-            # Use DefaultAzureCredential for auth
-            Config.__aoai_chatCompletionClient = AzureOpenAIChatCompletionClient(
-                azure_deployment=Config.AZURE_OPENAI_DEPLOYMENT_NAME,
-                api_version=Config.AZURE_OPENAI_API_VERSION,
-                azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
-                azure_ad_token_provider=Config.GetTokenProvider(
-                    "https://cognitiveservices.azure.com/.default"
-                ),
-                model="gpt-4o",
-                #model="o1-mini",
-                model_capabilities=model_capabilities,
-                temperature=0,
-            )
-        else:
-            # Fallback behavior to use API key
-            Config.__aoai_chatCompletionClient = AzureOpenAIChatCompletionClient(
-                azure_deployment=Config.AZURE_OPENAI_DEPLOYMENT_NAME,
-                api_version=Config.AZURE_OPENAI_API_VERSION,
-                azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
-                api_key=Config.AZURE_OPENAI_API_KEY,
-                model="gpt-4o",
-                #model="o1-mini",
-                model_capabilities=model_capabilities,
-                temperature=0,
-            )
-
-        return Config.__aoai_chatCompletionClient
+        Config.__openai_client = OpenAIChatCompletionClient(
+            api_key=Config.OPENAI_API_KEY,
+            base_url=Config.OPENAI_API_BASE,
+            api_version=Config.OPENAI_API_VERSION,
+            model=Config.OPENAI_API_MODEL,
+            model_capabilities=model_capabilities,
+            temperature=0,
+        )
+        return Config.__openai_client

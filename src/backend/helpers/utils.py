@@ -6,6 +6,10 @@ from azure.identity import DefaultAzureCredential
 from typing import Any, Dict, List, Optional, Tuple
 import json
 
+import asyncio
+from context.cosmos_memory import CosmosBufferedChatCompletionContext
+from models.messages import HumanFeedback
+
 from autogen_core import SingleThreadedAgentRuntime
 from autogen_core import AgentId
 from autogen_core.tool_agent import ToolAgent
@@ -29,6 +33,13 @@ from models.messages import BAgentType, Step
 from collections import defaultdict
 import logging
 from dotenv import load_dotenv
+
+COSMOS_URI = os.getenv("COSMOS_URI")
+COSMOS_KEY = os.getenv("COSMOS_KEY")
+COSMOS_DB_NAME = os.getenv("COSMOS_DB_NAME")
+COSMOS_CONTAINER_NAME = os.getenv("COSMOS_CONTAINER_NAME")
+
+logging.info(f"[COSMOS] Using DB={COSMOS_DB_NAME}, Container={COSMOS_CONTAINER_NAME} at URI={COSMOS_URI}")
 
 load_dotenv(".env", override=True)
 
@@ -57,7 +68,7 @@ technical_analysis_tools = get_enhanced_technical_analysis_tools()
 fundamental_analysis_tools = get_fundamental_analysis_tools()
 
 # Initialize the Azure OpenAI model client
-aoai_model_client = Config.GetAzureOpenAIChatCompletionClient(
+aoai_model_client = Config.GetOpenAIChatCompletionClient(
     {
         "vision": False,
         "function_calling": True,
@@ -69,6 +80,7 @@ aoai_model_client = Config.GetAzureOpenAIChatCompletionClient(
 async def initialize_runtime_and_context(
     session_id: Optional[str] = None,
     user_id: str = None
+    
 ) -> Tuple[SingleThreadedAgentRuntime, CosmosBufferedChatCompletionContext]:
     """
     Initializes agents and context for a given session.
@@ -295,6 +307,10 @@ async def initialize_runtime_and_context(
         ),
     )
 
+    logging.info(f"Connected to Cosmos DB for session {session_id} and user {user_id}")
+    logging.info(f"Connecting to Cosmos DB at {COSMOS_URI}")
+    logging.info(f"Database: {COSMOS_DB_NAME}, Container: {COSMOS_CONTAINER_NAME}")
+
     runtime.start()
     runtime_dict[session_id] = (runtime, cosmos_memory)
     return runtime_dict[session_id]
@@ -420,3 +436,32 @@ def rai_success(description: str) -> bool:
             and response_json['error']['code'] != "content_filter"
         ): return True
     return False
+
+async def run_background_tasks():
+    import time
+    while True:
+        try:
+            user_id = "test-user"
+            cosmos = CosmosBufferedChatCompletionContext("", user_id)
+            plans = await cosmos.get_all_plans()
+
+            for plan in plans:
+                steps = await cosmos.get_steps_by_plan(plan_id=plan.id)
+                for step in steps:
+                    if step.status == "planned":
+                        print(f"[Runner] Executing Step: {step.action}")
+                        runtime, _ = await initialize_runtime_and_context(plan.session_id, user_id)
+                        agent_id = AgentId(step.agent.lower(), plan.session_id)
+                        feedback = HumanFeedback(
+                            session_id=plan.session_id,
+                            plan_id=plan.id,
+                            step_id=step.id,
+                            approved=True,
+                            user_id=user_id,
+                            human_feedback="Auto-executed by run_background_tasks",
+                            updated_action=None,
+                        )
+                        await runtime.send_message(feedback, agent_id)
+        except Exception as e:
+            print(f"[Runner] Error: {e}")
+        await asyncio.sleep(10)

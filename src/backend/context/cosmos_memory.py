@@ -48,12 +48,22 @@ class CosmosBufferedChatCompletionContext(BufferedChatCompletionContext):
         asyncio.create_task(self.initialize())
 
     async def initialize(self):
-        # Create container if it does not exist
-        self._container = await self._database.create_container_if_not_exists(
+        from azure.cosmos import PartitionKey
+
+        # Step 1: Get the database client from the Cosmos client
+        client = Config.GetCosmosDatabaseClient()
+
+        # Step 2: Get the database proxy
+        database = client.get_database_client(Config.COSMOSDB_DATABASE)
+
+        # Step 3: Create container if it doesn't exist
+        self._container = await database.create_container_if_not_exists(
             id=self._cosmos_container,
             partition_key=PartitionKey(path="/session_id"),
         )
+
         self._initialized.set()
+
 
     async def add_item(self, item: BaseDataModel) -> None:
         """Add a data model item to Cosmos DB."""

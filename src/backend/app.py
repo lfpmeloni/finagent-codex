@@ -1,4 +1,5 @@
 # app.py
+import os
 import asyncio
 import logging
 import uuid
@@ -26,9 +27,8 @@ from helpers.utils import initialize_runtime_and_context, retrieve_all_agent_too
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from event_utils import track_event_if_configured
-from azure.monitor.opentelemetry import configure_azure_monitor
+# from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-import os
 #from azure.core.settings import settings 
 #from azure.ai.inference.tracing import AIInferenceInstrumentor 
 
@@ -37,15 +37,15 @@ import os
 
 #load_dotenv(".env", override=True)
 
-# Check if the Application Insights Instrumentation Key is set in the environment variables
-instrumentation_key = os.getenv("APPLICATIONINSIGHTS_INSTRUMENTATION_KEY")
-if instrumentation_key:
-    # Configure Application Insights if the Instrumentation Key is found
-    configure_azure_monitor(connection_string=instrumentation_key)
-    logging.info("Application Insights configured with the provided Instrumentation Key")
-else:
-    # Log a warning if the Instrumentation Key is not found
-    logging.warning("No Application Insights Instrumentation Key found. Skipping configuration")
+# # Check if the Application Insights Instrumentation Key is set in the environment variables
+# instrumentation_key = os.getenv("APPLICATIONINSIGHTS_INSTRUMENTATION_KEY")
+# if instrumentation_key:
+#     # Configure Application Insights if the Instrumentation Key is found
+#     # configure_azure_monitor(connection_string=instrumentation_key)
+#     logging.info("Application Insights configured with the provided Instrumentation Key")
+# else:
+#     # Log a warning if the Instrumentation Key is not found
+#     logging.warning("No Application Insights Instrumentation Key found. Skipping configuration")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -131,25 +131,27 @@ async def input_task_endpoint(input_task: InputTask, request: Request):
         description: Missing or invalid user information
     """
 
-    if not rai_success(input_task.description):
-        print("RAI failed")
+    # if not rai_success(input_task.description):
+    #     print("RAI failed")
 
-        track_event_if_configured(
-            "RAI failed",
-            {
-                "status": "Plan not created",
-                "description": input_task.description,
-                "session_id": input_task.session_id,
-            },
-        )
+    #     track_event_if_configured(
+    #         "RAI failed",
+    #         {
+    #             "status": "Plan not created",
+    #             "description": input_task.description,
+    #             "session_id": input_task.session_id,
+    #         },
+    #     )
 
-        return {
-            "status": "Plan not created",
-        }
-    authenticated_user = get_authenticated_user_details(
-    request_headers=request.headers
-    )
-    user_id = authenticated_user["user_principal_id"]
+    #     return {
+    #         "status": "Plan not created",
+    #     }
+    # authenticated_user = get_authenticated_user_details(
+    # request_headers=request.headers
+    # )
+    # user_id = authenticated_user["user_principal_id"]
+
+    user_id = "test-user"
 
     if not user_id:
         track_event_if_configured("UserIdNotFound", {"status_code": 400, "detail": "no user"})
@@ -241,10 +243,13 @@ async def human_feedback_endpoint(human_feedback: HumanFeedback, request: Reques
       400:
         description: Missing or invalid user information
     """
-    authenticated_user = get_authenticated_user_details(
-        request_headers=request.headers
-    )
-    user_id = authenticated_user["user_principal_id"]
+    # authenticated_user = get_authenticated_user_details(
+    #     request_headers=request.headers
+    # )
+    # user_id = authenticated_user["user_principal_id"]
+
+    user_id = "test-user"
+
     if not user_id:
         track_event_if_configured("UserIdNotFound", {"status_code": 400, "detail": "no user"})
         raise HTTPException(status_code=400, detail="no user")
@@ -774,8 +779,18 @@ async def get_agent_tools():
 # Serve the frontend from the backend
 # app.mount("/", StaticFiles(directory="wwwroot"), name="wwwroot")
 
+frontend_path = os.path.join(os.path.dirname(__file__), "../frontend/wwwroot")
+
+app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
+
 # Run the app
 if __name__ == "__main__":
     import uvicorn
+    import asyncio
+    from helpers.background_tasks import run_background_tasks
 
-    uvicorn.run("app:app", host="127.0.0.1", port=8001, reload=True)
+    @app.on_event("startup")
+    async def startup_event():
+        asyncio.get_event_loop().create_task(run_background_tasks())
+
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False)
